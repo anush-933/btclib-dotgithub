@@ -140,33 +140,30 @@ gh api repos/btclib-org/.github/rulesets --jq '.[].id' \
   | xargs -I{} gh api repos/btclib-org/.github/rulesets/{} \
     --jq '{name, target, enforcement, refs: .conditions.ref_name.include,
            rules: [.rules[].type],
-           bypass: [.bypass_actors[]?.bypass_mode]}'
+           bypass: [.bypass_actors[]?
+             | "\(.actor_type) \(.actor_id) \(.bypass_mode)"]}'
 # {"bypass":[],"enforcement":"active","name":"main-integrity",
 #  "refs":["refs/heads/main"],
 #  "rules":["required_linear_history","non_fast_forward","deletion"],
 #  "target":"branch"}
-# {"bypass":["pull_request"],"enforcement":"active",
+# {"bypass":["User 3296421 pull_request"],"enforcement":"active",
 #  "name":"main-self-merge","refs":["refs/heads/main"],
 #  "rules":["pull_request"],"target":"branch"}
 # {"bypass":[],"enforcement":"active","name":"tag-integrity",
 #  "refs":["refs/tags/v*"],"rules":["required_signatures"],"target":"tag"}
+# {"bypass":["RepositoryRole 5 always"],"enforcement":"active",
+#  "name":"tag-release-actors","refs":["refs/tags/v*"],
+#  "rules":["creation","update","deletion"],"target":"tag"}
 ```
 
-- `main-integrity` — required linear history, no
-  force pushes, no deletions — with **no bypass actor at all**, which is
-  what makes every one of those true of an administrator too.
-- `main-self-merge` — a pull request, an approving review, stale reviews
-  dismissed on push, conversations resolved, and `squash` as the only
-  merge method it accepts — bypassed by the maintainer in
-  **`pull_request` mode**. This repository's `README.md` carries no
-  OpenSSF Best Practices badge, and [section 11 gives the bypass to every
-  tree without one][s11-branch]. A change merged through it, with nobody
-  else's approval, reaches another tree at once wherever a job of that
-  tree's own checks this repository out at `main` or reads its
-  `dependency-review.yml` at `@main`: [section 10][s10-every] and
-  [section 11][s11-tokens] say which jobs read `main`.
-- `tag-integrity` — required signatures and nothing else, over
-  `refs/tags/v*` rather than over a branch, with **no bypass actor**.
+[Section 11][s11-branch] says what each of these rulesets holds and who
+bypasses it. What is this repository's own: its `README.md` carries no
+OpenSSF Best Practices badge, so `main-self-merge` is bypassed by the
+maintainer in **`pull_request` mode**. A change merged through that
+bypass, with nobody else's approval, reaches another tree at once
+wherever a job of that tree's own checks this repository out at `main`
+or reads its `dependency-review.yml` at `@main`: [section 10][s10-every]
+and [section 11][s11-tokens] say which jobs read `main`.
 
 ```shell
 gh api repos/btclib-org/.github/rulesets --jq '.[].id' \
@@ -186,28 +183,33 @@ so `dismiss_stale_reviews_on_push`, which is on, reaches no landing made
 through it. [Section 11 has what stands in for it][s11-branch].
 
 `main-self-merge`'s `bypass` is one of the fields the first call above
-is read for. It answers `["pull_request"]`, and [that mode against
-`always` is the whole of the design][s11-branch]: `always` would let its
-holder push to `main` directly, which is a drift the call is there to
-catch. That call reads `[]` where the endpoint omits `bypass_actors`,
-which it does for a token without push access, so the actors themselves
-are read from the ruleset, and `3296421` is the maintainer's account:
+is read for. It answers `["User 3296421 pull_request"]`, and [that mode
+against `always` is the whole of the design][s11-branch]: `always` would
+let its holder push to `main` directly, which is a drift the call is
+there to catch. That call reads `[]` where the endpoint omits
+`bypass_actors`, which it does for a token without push access.
+`RepositoryRole 5` is the `admin` role, and `3296421` is the
+maintainer's account:
 
 ```shell
-gh api repos/btclib-org/.github/rulesets/21142971 --jq .bypass_actors
-# [{"actor_id":3296421,"actor_type":"User","bypass_mode":"pull_request"}]
+gh api graphql -f query='{repository(owner: "btclib-org", name: ".github")
+  {rulesets(first: 10) {nodes {bypassActors(first: 5)
+  {nodes {repositoryRoleDatabaseId repositoryRoleName}}}}}}' \
+  --jq '.data.repository.rulesets.nodes[].bypassActors.nodes[]
+    | select(.repositoryRoleName)
+    | "\(.repositoryRoleDatabaseId) \(.repositoryRoleName)"'
+# 5 admin
 gh api users/fametrano --jq .id
 # 3296421
 ```
 
-`tag-integrity` matches no ref: `CONTRIBUTING.md`'s *A version, and no
-release* is where nothing being tagged is measured. It stands ahead
-of any tag rather than being created alongside one, so a `v*` pushed to
-this repository meets it.
+`tag-integrity` and `tag-release-actors` hold for this repository's own
+`v*` tags. [Section 12][s12] says what such a tag is, that it is no
+release, and when one is cut.
 
 A `v*` tag push that brings an unsigned commit is refused. A tag on a
 commit already on `main` is accepted whether it is signed, unsigned or
-lightweight, so the rule does not make a release tag signed
+lightweight, so `tag-integrity` does not make a release tag signed
 (btclib-org/.github#1635). That rests on `git tag -s` in the release
 steps and on reading the signature back:
 
@@ -595,5 +597,6 @@ running a command.
 [s11-sigs]: ./README.md#signatures
 [s11-tokens]: ./README.md#tokens-publishing-scanning
 [s11]: ./README.md#11-github-settings
+[s12]: ./README.md#12-releasing
 [s15]: ./README.md#15-auditing-a-repository-against-this-file
 [s16]: ./README.md#16-checklists

@@ -21,14 +21,19 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from . import ORG, by_hand, gh_json
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
 MAIN = "refs/heads/main"
 TAGS = "refs/tags/v*"
+# the id the rulesets endpoint gives the repository role `admin`
+ADMIN_ROLE = 5
 
 pytestmark = pytest.mark.integration
 
@@ -82,19 +87,35 @@ def covering(
     active: list[dict[str, Any]],
     target: str,
     ref: str,
+    *,
+    excluding: bool = False,
 ) -> list[dict[str, Any]]:
     """Return the active rulesets that apply to one ref pattern.
+
+    GitHub applies a ruleset to no ref that an exclude pattern matches,
+    even where an include pattern matches it too. Whether one pattern
+    spares a ref another matches is a question for GitHub's matcher, not
+    this suite, so each caller takes the reading that cannot pass wrongly.
+
+    A caller asking that a rule be present leaves `excluding` off: a
+    ruleset that excludes any ref then does not count, whatever the
+    exclusion names, so an exclusion fails the test. A caller asking that
+    a rule be absent, or carried once, sets it: every ruleset whose
+    include list matches then counts, since an exclusion may spare
+    another ref and still leave the rule on this one.
 
     :param active: the repository's rulesets.
     :param target: `branch` or `tag`.
     :param ref: the pattern the ruleset must include.
+    :param excluding: count a ruleset that excludes a ref.
     :returns: those that match, in the order the API gave them.
     """
     return [
         ruleset
         for ruleset in active
         if ruleset["target"] == target
-        and ref in (ruleset["conditions"]["ref_name"]["include"])
+        and ref in ruleset["conditions"]["ref_name"]["include"]
+        and (excluding or not ruleset["conditions"]["ref_name"].get("exclude"))
     ]
 
 
@@ -124,6 +145,20 @@ def enforcing(rulesets_of_ref: list[dict[str, Any]], rule: str) -> list[dict[str
         for entry in ruleset["rules"]
         if entry["type"] == rule
     ]
+
+
+def unreadable(entries: Iterable[dict[str, Any]]) -> bool:
+    """Say whether any of these rules hides who bypasses it.
+
+    A caller asks it only once the bypass lists it could read show no
+    violation. GitHub returns `bypass_actors` only to a caller with
+    write access to that ruleset, so one list can be read and another
+    not, and a violation seen is a failure whatever is unseen beside it.
+
+    :param entries: rules as `enforcing` returns them.
+    :returns: whether one of them came back without `bypass_actors`.
+    """
+    return any(entry["bypass_actors"] is None for entry in entries)
 
 
 def test_main_refuses_a_rewritten_commit(
@@ -159,21 +194,22 @@ def test_main_refuses_a_rewritten_commit(
         found = {rule: enforcing(covers, rule) for rule in wanted}
         if absent := sorted(rule for rule, carried in found.items() if not carried):
             missing[repository] = absent
-        present = [entry for carried in found.values() for entry in carried]
-        if any(entry["bypass_actors"] is None for entry in present):
-            unseen.append(repository)
-            continue
         if bypassed := sorted(
             rule
             for rule, carried in found.items()
             if any(entry["bypass_actors"] for entry in carried)
         ):
             excused[repository] = bypassed
+        elif unreadable(entry for carried in found.values() for entry in carried):
+            unseen.append(repository)
     refusing = sorted(
         repository
         for repository, active in rulesets.items()
         if any(
-            enforcing(covering(active, "branch", ref), "required_signatures")
+            enforcing(
+                covering(active, "branch", ref, excluding=True),
+                "required_signatures",
+            )
             for ref in (MAIN, "~DEFAULT_BRANCH", "~ALL")
         )
     )
@@ -218,7 +254,8 @@ def test_a_merge_needs_one_review_and_a_badge_tree_has_no_bypass(
         if not carried:
             wrong[repository] = "no pull_request rule on main"
             continue
-        if len(carried) > 1:
+        every = covering(active, "branch", MAIN, excluding=True)
+        if len(enforcing(every, "pull_request")) > 1:
             wrong[repository] = "several rulesets carry the review rule on main"
             continue
         rule = carried[0]
@@ -254,18 +291,109 @@ def test_a_repository_with_tags_refuses_an_unsigned_one(
     release has nothing to protect yet, and a rule about a shape of tag
     it does not use would be enforcing nothing.
 
+    Nobody bypasses the rule, an administrator included, in any ruleset
+    that carries it over `refs/tags/v*`, an excluding one included. Who
+    is excused is not public, for the reason
+    `test_main_refuses_a_rewritten_commit` gives, and the run reports
+    itself skipped where it could not be read.
+
     :param repositories: the names to ask about.
     :param rulesets: the active rulesets of each repository.
     """
-    unprotected = [
-        repository
-        for repository in sorted(repositories)
-        if gh_json(f"repos/{ORG}/{repository}/tags?per_page=1")
-        and not enforcing(
-            covering(rulesets[repository], "tag", TAGS), "required_signatures"
+    unprotected: list[str] = []
+    excused: list[str] = []
+    unseen: list[str] = []
+    for repository in sorted(repositories):
+        if not gh_json(f"repos/{ORG}/{repository}/tags?per_page=1"):
+            continue
+        active = rulesets[repository]
+        if not enforcing(covering(active, "tag", TAGS), "required_signatures"):
+            unprotected.append(repository)
+        every = enforcing(
+            covering(active, "tag", TAGS, excluding=True), "required_signatures"
         )
-    ]
+        if any(entry["bypass_actors"] for entry in every):
+            excused.append(repository)
+        elif unreadable(every):
+            unseen.append(repository)
     assert not unprotected, f"repositories whose tags need no signature: {unprotected}"
+    assert not excused, f"repositories whose tag signatures are bypassed: {excused}"
+    if unseen:
+        pytest.skip(
+            "this run's token cannot see who bypasses a tag signature on"
+            f" {', '.join(unseen)}: bypass_actors needs push access to read"
+        )
+
+
+def test_only_an_administrator_moves_a_release_tag(
+    repositories: list[str],
+    rulesets: dict[str, list[dict[str, Any]]],
+) -> None:
+    """A release tag is created, moved and deleted by an administrator alone.
+
+    `creation`, `update` and `deletion` are each carried on `refs/tags/v*`
+    by a ruleset that excludes no ref. Every ruleset carrying one of them
+    over `refs/tags/v*`, an excluding one included, excuses the
+    repository's admin role in `always` mode and nobody else: a ruleset
+    that spares one tag and excuses nobody would still keep an
+    administrator from every other. So a GitHub App, an Actions token or
+    a deploy key cannot push or remove a release tag, and an
+    administrator can. Asked only of repositories that have a tag, as
+    the test above is.
+
+    Who is excused is not public, for the reason
+    `test_main_refuses_a_rewritten_commit` gives, and the run reports
+    itself skipped where it could not be read.
+
+    :param repositories: the names to ask about.
+    :param rulesets: the active rulesets of each repository.
+    """
+    wanted = ("creation", "update", "deletion")
+    admin = {"actor_type": "RepositoryRole", "actor_id": ADMIN_ROLE}
+    missing: dict[str, list[str]] = {}
+    excused: dict[str, list[str]] = {}
+    not_always: list[str] = []
+    unseen: list[str] = []
+    for repository in sorted(repositories):
+        if not gh_json(f"repos/{ORG}/{repository}/tags?per_page=1"):
+            continue
+        active = rulesets[repository]
+        covers = covering(active, "tag", TAGS)
+        if absent := sorted(rule for rule in wanted if not enforcing(covers, rule)):
+            missing[repository] = absent
+        every = covering(active, "tag", TAGS, excluding=True)
+        present = [entry for rule in wanted for entry in enforcing(every, rule)]
+        visible = [entry for entry in present if entry["bypass_actors"] is not None]
+        if others := sorted(
+            {
+                f"{actor['actor_type']} {actor['actor_id']}"
+                for entry in visible
+                for actor in entry["bypass_actors"]
+                if {key: actor.get(key) for key in admin} != admin
+            }
+        ):
+            excused[repository] = others
+        if not all(
+            any(
+                {key: actor.get(key) for key in admin} == admin
+                and actor["bypass_mode"] == "always"
+                for actor in entry["bypass_actors"]
+            )
+            for entry in visible
+        ):
+            not_always.append(repository)
+        if not others and repository not in not_always and unreadable(present):
+            unseen.append(repository)
+    assert not missing, f"release tags not restricted by: {missing}"
+    assert not excused, f"release tags another actor may push: {excused}"
+    assert not not_always, (
+        f"release tags whose admin role bypass is not always: {not_always}"
+    )
+    if unseen:
+        pytest.skip(
+            "this run's token cannot see who bypasses a tag rule on"
+            f" {', '.join(unseen)}: bypass_actors needs push access to read"
+        )
 
 
 def test_squash_is_the_only_button(settings: dict[str, dict[str, Any]]) -> None:
