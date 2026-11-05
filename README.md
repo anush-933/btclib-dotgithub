@@ -2235,8 +2235,12 @@ code runs on, never above the `requires-python` floor, and turns off the rules
 each: the trees' own style, or the stable ruff rule that reads the same code,
 whose reading stands where Sourcery reads more widely. `enable:` and
 `rule_types:` stay at their defaults, and `disable:` can name a tag: `disable:
-[default]` turns every rule off. No `ignore:` entry, matched at any depth,
-covers a tracked Python file.
+[default]` turns every rule off. No `ignore:` entry, read as Sourcery reads it,
+covers a tracked Python file but one pinned byte for byte to an upstream as
+section 7's *Test data is vendored, never fetched* says: a finding there is
+upstream's, and a `# sourcery skip` would end the copy being byte for byte. A
+pin to a repository outside the tree's fork network is taken on trust.
+`ignored()` and `pinned()` in `tests/hooks_test.py` are the two readings.
 
 **macOS is supported on arm64 alone, and no workflow runs on an x86_64 macOS
 image.** An x86_64 macOS cell can hang until the job's timeout and hold up a
