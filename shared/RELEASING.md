@@ -497,7 +497,8 @@ request, next to `deps-latest`'s own result.
 
    ```shell
    git tag -s "v${version:?}" -m "release v${version:?}" "${sha:?}" &&
-   git show "v${version:?}:pyproject.toml" | grep '^version' &&
+   git show "v${version:?}:pyproject.toml" |
+     grep -Fx "version = \"${version:?}\"" &&
    git push origin "v${version:?}"
    ```
 
@@ -509,6 +510,11 @@ request, next to `deps-latest`'s own result.
    with nothing uploaded, which is the guard doing its job; the `git show`
    above is the same check one step earlier, where it costs nothing, and
    the chain is what makes the push wait on it.
+
+   `grep -Fx` matches only the whole line `version = "${version}"`, its
+   dots as dots, so a tag on a commit that declares another version
+   stops the chain. A tag that does not exist stops it too: `git show`
+   prints nothing on its output, and `grep` finds no line.
 
 1. Read the tag's signature back from the API, now that it is pushed. It
    answers `true`: an unsigned annotated tag answers `false`, and a
