@@ -64,8 +64,10 @@ explain, is closed without review.
 **For a pull request the agent opened, whoever approves it reads every
 line and answers for it as their own**, the agent being `claude[bot]`,
 run on an issue by [section 10][s10]'s `reusable-claude-implement.yml`.
-The agent signs off nothing, since a bot cannot certify the [Developer
-Certificate of Origin][dco], so the approval is the certification.
+Where the maintainer lands it through the bypass, without an approval,
+the maintainer does. The agent signs off nothing, since a bot cannot
+certify the [Developer Certificate of Origin][dco], so the approval, or
+the maintainer's landing, is the certification.
 
 **Write plainly**, in the tree and on the forge: the point first, plain
 words, one fact per sentence. On the forge, the title and the first
