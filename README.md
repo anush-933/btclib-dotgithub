@@ -3914,8 +3914,8 @@ A label means what its description says. Who applies and removes it:
   it would not replace the script, and leaving them for the release's author to
   list would leave the hand-written notes unchecked for them. What the two
   report is either a `RELEASE_NOTES.md` entry or a reason for not being one,
-  written where the release is written. A break of a kind neither compares is
-  read by hand, as the public API step of `shared/RELEASING.md` says.
+  written where the release is written. A break neither reports is read by hand,
+  as the public API step of `shared/RELEASING.md` says.
 
     **The release path and not the merge gate.** Before 1.0 a package breaks its
     surface deliberately, so a gate comparing the branch against the last

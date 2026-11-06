@@ -332,10 +332,11 @@ request, next to `deps-latest`'s own result.
    finding, so the day that reasoning stops holding — a cycle that means to
    break nothing — making the step a gate is a line per command.
 
-   Some breaks neither compares, such as an `@overload`'s signatures: the
-   docstring of the `api_gaps.py` fetched above names the kinds known. Read the
-   changes of those kinds since the previous tag by hand: a break among them
-   wants an entry too.
+   Some breaks neither reports: a kind neither compares, such as an
+   `@overload`'s signatures, and what griffe alone compares on a pair it skips.
+   The docstring of the `api_gaps.py` fetched above says what is known of both.
+   Read those changes since the previous tag by hand: a break among them wants
+   an entry too.
 
    griffe also exits 1 when it fails on an error it does not catch, such
    as a tag the repository lacks: its output is then a Python traceback,
